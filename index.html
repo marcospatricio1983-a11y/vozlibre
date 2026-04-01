@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="theme-color" content="#0F6E56"/>
+  <meta name="description" content="Asistente total por voz para personas no videntes"/>
+  <title>VozLibre</title>
+  <link rel="manifest" href="manifest.json"/>
+  <link rel="apple-touch-icon" href="icon-192.png"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:sans-serif;background:#111;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:1.5rem 1rem;gap:1.2rem}
+    h1{font-size:1.8rem;font-weight:600;color:#5DCAA5}
+    #estado{font-size:1.1rem;color:#aaa;min-height:1.5rem;text-align:center}
+    #log{width:100%;max-width:600px;background:#1a1a1a;border-radius:12px;padding:1rem;min-height:180px;max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;font-size:1rem;line-height:1.6}
+    .msg-user{align-self:flex-end;background:#0F6E56;padding:10px 14px;border-radius:12px;max-width:85%}
+    .msg-bot{align-self:flex-start;background:#2a2a2a;padding:10px 14px;border-radius:12px;max-width:85%}
+    .msg-label{font-size:0.72rem;color:#aaa;margin-bottom:4px}
+    #btn-mic{width:90px;height:90px;border-radius:50%;background:#0F6E56;border:none;color:#fff;font-size:2.2rem;cursor:pointer;transition:transform 0.15s,background 0.2s}
+    #btn-mic:active{transform:scale(0.94)}
+    #btn-mic.escuchando{background:#1D9E75;animation:pulso 1s infinite}
+    @keyframes pulso{0%,100%{box-shadow:0 0 0 0 rgba(29,158,117,0.5)}50%{box-shadow:0 0 0 18px rgba(29,158,117,0)}}
+    .fila-botones{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;width:100%;max-width:600px}
+    button.sec{padding:12px 18px;border-radius:10px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:1rem;cursor:pointer}
+    button.sec:active{background:#2a2a2a}
+    .ajustes{width:100%;max-width:600px;background:#1a1a1a;border-radius:12px;padding:1rem;display:flex;flex-direction:column;gap:14px}
+    .ajuste-fila{display:flex;align-items:center;gap:12px}
+    .ajuste-fila label{font-size:0.9rem;color:#aaa;min-width:110px}
+    input[type=range]{flex:1;accent-color:#1D9E75;height:6px}
+    #comandos{font-size:0.82rem;color:#666;text-align:center;max-width:600px;line-height:1.7}
+  </style>
+</head>
+<body>
+  <h1>VozLibre</h1>
+  <div id="estado" aria-live="polite">Iniciando...</div>
+  <div id="log" role="log" aria-live="polite" aria-label="Conversación"></div>
+
+  <button id="btn-mic" aria-label="Activar micrófono — pulsar para hablar">🎤</button>
+
+  <div class="fila-botones">
+    <button class="sec" id="btn-auto" aria-pressed="false">Escucha continua</button>
+    <button class="sec" id="btn-repetir" aria-label="Repetir último mensaje">Repetir</button>
+    <button class="sec" id="btn-limpiar" aria-label="Limpiar conversación">Limpiar</button>
+  </div>
+
+  <div class="ajustes" aria-label="Ajustes de voz">
+    <div class="ajuste-fila">
+      <label for="vel">Velocidad: <span id="vel-val">1.0</span>x</label>
+      <input type="range" id="vel" min="0.5" max="2" step="0.1" value="1" aria-label="Velocidad de voz"/>
+    </div>
+    <div class="ajuste-fila">
+      <label for="ton">Tono: <span id="ton-val">1.0</span></label>
+      <input type="range" id="ton" min="0.5" max="2" step="0.1" value="1" aria-label="Tono de voz"/>
+    </div>
+  </div>
+
+  <p id="comandos">Comandos: hora · fecha · batería · pantalla completa · salir de pantalla · nueva pestaña · detener · ayuda · o cualquier pregunta libre</p>
+
+  <script>
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let rec, autoEsc = false, mensajes = [], ultimoBot = "";
+    let vel = 1, ton = 1;
+
+    const el = id => document.getElementById(id);
+    const logEl = el("log"), estadoEl = el("estado"), btnMic = el("btn-mic");
+
+    document.getElementById("vel").oninput = e => { vel = parseFloat(e.target.value); el("vel-val").textContent = vel.toFixed(1); };
+    document.getElementById("ton").oninput = e => { ton = parseFloat(e.target.value); el("ton-val").textContent = ton.toFixed(1); };
+
+    function hablar(txt, cb) {
+      if (!txt) return cb && cb();
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(txt);
+      u.lang = "es-AR"; u.rate = vel; u.pitch = ton;
+      const vs = window.speechSynthesis.getVoices();
+      const voz = vs.find(v => v.lang.startsWith("es"));
+      if (voz) u.voice = voz;
+      if (cb) u.onend = cb;
+      window.speechSynthesis.speak(u);
+    }
+
+    function setEstado(txt) { estadoEl.textContent = txt; }
+
+    function agregarMensaje(rol, txt) {
+      mensajes.push({role: rol, text: txt});
+      const d = document.createElement("div");
+      d.className = rol === "user" ? "msg-user" : "msg-bot";
+      const lbl = document.createElement("div");
+      lbl.className = "msg-label";
+      lbl.textContent = rol === "user" ? "Vos" : "VozLibre";
+      const p = document.createElement("p");
+      p.textContent = txt;
+      d.appendChild(lbl); d.appendChild(p);
+      logEl.appendChild(d);
+      logEl.scrollTop = logEl.scrollHeight;
+      if (rol === "assistant") ultimoBot = txt;
+    }
+
+    const CMDS = [
+      { tr: ["hora","qué hora"], fn: () => { const n=new Date(); return `Son las ${n.getHours()} horas con ${n.getMinutes()} minutos.`; } },
+      { tr: ["fecha","qué día","qué fecha"], fn: () => `Hoy es ${new Date().toLocaleDateString('es-AR',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}.` },
+      { tr: ["batería","bateria","carga"], fn: async () => { if(navigator.getBattery){ const b=await navigator.getBattery(); return `La batería está al ${Math.round(b.level*100)} por ciento${b.charging?', y está cargando':''}.`; } return "No puedo acceder a la batería desde este navegador."; } },
+      { tr: ["pantalla completa","pantalla llena"], fn: () => { document.documentElement.requestFullscreen?.(); return "Pantalla completa activada."; } },
+      { tr: ["salir de pantalla","salir pantalla"], fn: () => { document.exitFullscreen?.(); return "Saliendo de pantalla completa."; } },
+      { tr: ["nueva pestaña","abrir pestaña"], fn: () => { window.open('about:blank','_blank'); return "Nueva pestaña abierta."; } },
+      { tr: ["detener","para","stop","silencio","callate"], fn: () => { window.speechSynthesis.cancel(); return null; } },
+      { tr: ["ayuda","qué puedo decir","comandos"], fn: () => "Podés decirme: hora, fecha, batería, pantalla completa, salir de pantalla, nueva pestaña, detener, o hacerme cualquier pregunta libre." },
+    ];
+
+    async function procesarTexto(txt) {
+      const t = txt.toLowerCase();
+      for (const c of CMDS) {
+        if (c.tr.some(tr => t.includes(tr))) {
+          const r = await c.fn();
+          if (r) { agregarMensaje("assistant", r); hablar(r, () => autoEsc && iniciarEscucha()); }
+          else { if (autoEsc) setTimeout(iniciarEscucha, 800); }
+          return;
+        }
+      }
+      setEstado("Pensando...");
+      const hist = mensajes.slice(-10).map(m => ({role: m.role==="assistant"?"assistant":"user", content: m.text}));
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({
+            model:"claude-sonnet-4-20250514", max_tokens:1000,
+            system:`Eres VozLibre, asistente de voz en español para personas no videntes. Respondé siempre en español argentino, con texto plano, sin markdown, sin asteriscos ni símbolos. Oraciones cortas y claras. Sé cálido y directo.`,
+            messages: hist
+          })
+        });
+        const data = await res.json();
+        const reply = data.content?.map(b=>b.text||"").join("") || "No pude obtener respuesta.";
+        agregarMensaje("assistant", reply);
+        hablar(reply, () => autoEsc && iniciarEscucha());
+      } catch(e) {
+        const err = "Hubo un problema de conexión. Por favor intentá de nuevo.";
+        agregarMensaje("assistant", err);
+        hablar(err, () => autoEsc && iniciarEscucha());
+      }
+      setEstado("Listo");
+    }
+
+    function iniciarEscucha() {
+      if (!SR) { hablar("Tu navegador no soporta reconocimiento de voz. Usá Chrome."); return; }
+      if (rec) try { rec.abort(); } catch(e){}
+      rec = new SR();
+      rec.lang = "es-AR"; rec.continuous = false; rec.interimResults = false;
+      btnMic.classList.add("escuchando");
+      rec.onstart = () => { setEstado("Escuchando..."); window.speechSynthesis.cancel(); };
+      rec.onresult = e => {
+        let t = e.results[0][0].transcript.trim();
+        t = t.replace(/\s{2,}/g, ", ");
+        t = t.replace(/([a-záéíóúüñA-ZÁÉÍÓÚÜÑ]{3,})\s+([A-ZÁÉÍÓÚÜÑ])/g, "$1. $2");
+        t = t.charAt(0).toUpperCase() + t.slice(1);
+        if (!/[.!?]$/.test(t)) t += ".";
+        agregarMensaje("user", t);
+        btnMic.classList.remove("escuchando");
+        setEstado("Procesando...");
+        procesarTexto(t);
+      };
+      rec.onerror = e => {
+        btnMic.classList.remove("escuchando");
+        if (e.error !== "no-speech") { setEstado("Error — intentá de nuevo"); hablar("No pude escucharte. Intentá de nuevo."); }
+        else { setEstado("Listo"); }
+        if (autoEsc) setTimeout(iniciarEscucha, 1500);
+      };
+      rec.onend = () => { btnMic.classList.remove("escuchando"); };
+      rec.start();
+    }
+
+    btnMic.onclick = () => iniciarEscucha();
+
+    el("btn-auto").onclick = function() {
+      autoEsc = !autoEsc;
+      this.textContent = autoEsc ? "Detener escucha continua" : "Escucha continua";
+      this.setAttribute("aria-pressed", autoEsc);
+      if (autoEsc) { hablar("Escucha continua activada.", () => iniciarEscucha()); }
+      else { hablar("Escucha continua desactivada."); if(rec) try{rec.abort();}catch(e){} }
+    };
+
+    el("btn-repetir").onclick = () => { if(ultimoBot) hablar(ultimoBot); };
+    el("btn-limpiar").onclick = () => { mensajes=[]; ultimoBot=""; logEl.innerHTML=""; hablar("Conversación reiniciada."); };
+
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+
+    window.speechSynthesis.onvoiceschanged = () => {};
+    setTimeout(() => {
+      const bienvenida = "Bienvenido a VozLibre. Tu asistente por voz. Pulsá el botón central o activá escucha continua para comenzar. Decí ayuda para ver los comandos disponibles.";
+      agregarMensaje("assistant", bienvenida);
+      hablar(bienvenida);
+      setEstado("Listo");
+    }, 700);
+  </script>
+</body>
+</html>
